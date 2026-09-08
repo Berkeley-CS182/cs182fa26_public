@@ -1,6 +1,9 @@
 """Portable setup and submission helpers for CS 182/282A Fall 2026 HW02."""
 from pathlib import Path
+import ast
 import hashlib
+import json
+import re
 import tarfile
 import urllib.error
 import urllib.request
@@ -80,6 +83,89 @@ def download_cifar10():
     return target
 
 
+def _validate_saved_notebook(path):
+    """Catch the unchanged on-disk starter without executing or grading code."""
+    try:
+        notebook = json.loads(path.read_text(encoding='utf-8'))
+        cells = notebook['cells']
+        if not isinstance(cells, list):
+            raise ValueError('Notebook cells must be a list.')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError(f'Cannot read the saved notebook {path}. '
+                         'Download your completed notebook as .ipynb, replace this file, and rerun packaging.') from error
+
+    variables = ('lr', 'num_epochs', 'batch_size', 'lr_decay')
+
+    def bind(target, value, state):
+        if isinstance(target, ast.Name) and target.id in state:
+            state[target.id] = isinstance(value, ast.Constant) and value.value is None
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            values = value.elts if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts) else [None] * len(target.elts)
+            for item, item_value in zip(target.elts, values):
+                bind(item, item_value, state)
+
+    def assigned_none(statements, initial):
+        state = initial.copy()
+        for statement in statements:
+            if isinstance(statement, ast.Assign):
+                for target in statement.targets:
+                    bind(target, statement.value, state)
+            elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                bind(statement.target, statement.value, state)
+            elif isinstance(statement, ast.AugAssign):
+                bind(statement.target, None, state)
+            elif isinstance(statement, ast.If):
+                left = assigned_none(statement.body, state)
+                right = assigned_none(statement.orelse, state)
+                state = {name: left[name] and right[name] for name in variables}
+            elif isinstance(statement, (ast.For, ast.While, ast.Try, ast.With)):
+                # Complex control flow is not graded here. Do not reject a
+                # potentially valid reassignment merely because it is conditional.
+                for node in ast.walk(statement):
+                    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in state:
+                        state[node.id] = False
+        return state
+
+    # Follow assignments across cells so moving/splitting the tuning section
+    # does not force a particular notebook layout. Unknown values are allowed.
+    state = dict.fromkeys(variables, False)
+    tuning_names = set()
+    possible_writes = set()
+    for cell in cells:
+        if not isinstance(cell, dict) or cell.get('cell_type') != 'code':
+            continue
+        source = cell.get('source', '')
+        source = source if isinstance(source, str) else ''.join(source)
+        tuning_names.update(name for name in ('best_model', 'best_solver') if name in source)
+        # Magics may assign notebook globals. Preserve that uncertainty when
+        # removing their non-Python syntax, rather than discarding the write.
+        lines = []
+        for line in source.splitlines():
+            if line.lstrip().startswith(('%', '!')):
+                possible_writes.update(name for name in variables if re.search(r'\b' + name + r'\b', line))
+            else:
+                lines.append(line)
+        source = '\n'.join(lines)
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            # IPython supports syntax outside ordinary Python. This narrow
+            # stale-starter check must not become a notebook syntax grader.
+            state.update((name, False) for name in variables if name in source)
+            continue
+        # A helper function may write declared globals when called elsewhere.
+        # We do not execute calls or infer their ordering across notebook cells.
+        possible_writes.update(name for node in ast.walk(tree) if isinstance(node, ast.Global)
+                               for name in node.names if name in variables)
+        state = assigned_none(tree.body, state)
+    unfinished = [name for name in variables if state[name] and name not in possible_writes]
+    if tuning_names == {'best_model', 'best_solver'} and unfinished:
+        raise ValueError(f'The saved notebook {path} still has None model-tuning placeholders: '
+                         + ', '.join(unfinished) + '. Download your completed Colab notebook as .ipynb, '
+                         'upload it to replace this exact file, and rerun packaging. '
+                         'Locally, save your completed notebook to this path.')
+
+
 def build_submission(include_rmsprop=False):
     """Package only assignment sources and the required experiment artifacts."""
     log_names = [f'optimizer_experiment_{rule}.npz' for rule in ('sgd', 'sgd_momentum', 'adam')]
@@ -96,6 +182,8 @@ def build_submission(include_rmsprop=False):
     missing = [str(path.relative_to(ROOT)) for path in files if not path.is_file()]
     if missing:
         raise FileNotFoundError('Complete and save the assignment before packaging. Missing: ' + ', '.join(missing))
+    _validate_saved_notebook(files[0])
+    print('Packaging saved notebook:', files[0])
     output = ROOT / 'cs182hw2_fa26_submission.zip'
     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as handle:
         for path in files:
