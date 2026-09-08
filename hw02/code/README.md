@@ -11,6 +11,8 @@ the Fall 2026 public repository if needed, and download CIFAR-10. Setup reruns
 preserve the files you edit. Edit the accompanying Python files using Colab's
 Files pane. Save a copy of the completed notebook in the same `hw02/code`
 directory before building the submission ZIP, so the archive contains your work.
+If Colab reports that automatic module reloading is unavailable, restart the
+runtime and rerun setup after editing a `.py` file so your changes are imported.
 
 ## Local setup
 
@@ -29,10 +31,20 @@ python assignment_utils.py
 python -m jupyterlab
 ```
 
-The dataset helper downloads the original CIFAR-10 Python archive, verifies its
-checksum, and extracts it under `deeplearning/datasets/`. About 170 MB of download
+The dataset helper downloads the original CIFAR-10 Python archive from the
+[BrainChip mirror](https://data.brainchip.com/dataset-mirror/cifar10/cifar-10-python.tar.gz),
+with the [official Toronto server](https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz)
+as a fallback. Both sources must pass the original archive's MD5 checksum
+`c58f30108f718f92721af3b95e74349a` before safe extraction under
+`deeplearning/datasets/`. About 170 MB of download
 and several GB of working memory are needed for the complete experiment. The
 notebook's Colab-only steps skip automatically on a local machine.
+
+The helper prints download progress and uses a 60-second connection/read timeout
+for each source. A failed download or checksum triggers the fallback source;
+if both fail, it reports a retry option. You can also download the archive from the
+URL in that message, save `cifar-10-python.tar.gz` under `deeplearning/datasets/`,
+and rerun setup; a cached or manually supplied archive must pass the same checksum.
 
 ## What to implement
 
