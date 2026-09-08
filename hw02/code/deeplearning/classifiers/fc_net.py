@@ -50,7 +50,6 @@ class TwoLayerNet(object):
         self.params['W2'] = weight_scale * np.random.randn(hidden_dim, num_classes)
         self.params['b2'] = np.zeros(num_classes)
         ############################################################################
-        #                             END OF YOUR CODE                             #
         ############################################################################
 
     def loss(self, X, y=None):
@@ -81,7 +80,6 @@ class TwoLayerNet(object):
         layer2_out, cache2 = affine_forward(layer1_out, self.params['W2'], self.params['b2'])
         scores = layer2_out
         ############################################################################
-        #                             END OF YOUR CODE                             #
         ############################################################################
 
         # If y is None then we are in test mode so just return scores
@@ -107,7 +105,6 @@ class TwoLayerNet(object):
         grads['W2'] += self.reg * self.params['W2']
         grads['W1'] += self.reg * self.params['W1']
         ############################################################################
-        #                             END OF YOUR CODE                             #
         ############################################################################
 
         return loss, grads
@@ -129,19 +126,10 @@ class FullyConnectedNet(object):
     self.params dictionary and will be learned using the Solver class.
     """
 
-    def __init__(
-        self,
-        hidden_dims,
-        input_dim=3 * 32 * 32,
-        num_classes=10,
-        dropout=0,
-        use_batchnorm=False,
-        reg=0.0,
-        weight_scale=1e-2,
-        dtype=np.float32,
-        seed=None,
-        initialization="random",
-    ):
+    def __init__(self, hidden_dims, input_dim=3 * 32 * 32, num_classes=10,
+                 dropout=0, use_batchnorm=False, reg=0.0,
+                 weight_scale=1e-2, dtype=np.float32, seed=None,
+                 initialization='random'):
         """
         Initialize a new FullyConnectedNet.
 
@@ -181,27 +169,21 @@ class FullyConnectedNet(object):
         ############################################################################
         dims = [input_dim, *hidden_dims, num_classes]
         for i in range(self.num_layers):
-            if initialization == "random":
-                self.params["W%d" % (i + 1)] = (
-                    np.random.randn(dims[i], dims[i + 1]) * weight_scale
-                )
-            elif initialization == "he":
+            if initialization == 'random':
+                self.params['W%d' % (i + 1)] = np.random.randn(dims[i], dims[i + 1])*weight_scale
+            elif initialization == 'he':
                 ############################################################################
-                # TODO: YOUR CODE HERE                                                     #
                 ############################################################################
-                raise NotImplementedError("Implement the requested initialization in FullyConnectedNet.__init__.")
+                self.params['W%d' % (i + 1)] = np.random.randn(dims[i], dims[i + 1]) * math.sqrt(2. / dims[i])
                 ############################################################################
-                #                             END OF YOUR CODE                             #
                 ############################################################################
-            elif initialization == "zero":
+            elif initialization == 'zero':
                 ############################################################################
-                # TODO: YOUR CODE HERE                                                     #
                 ############################################################################
-                raise NotImplementedError("Implement the requested initialization in FullyConnectedNet.__init__.")
+                self.params['W%d' % (i + 1)] = np.zeros((dims[i], dims[i + 1]))
                 ############################################################################
-                #                             END OF YOUR CODE                             #
                 ############################################################################
-            self.params["b%d" % (i + 1)] = np.zeros(dims[i + 1])
+            self.params['b%d' % (i + 1)] = np.zeros(dims[i + 1])
 
         for k, v in self.params.items():
             self.params[k] = v.astype(dtype)
@@ -213,7 +195,7 @@ class FullyConnectedNet(object):
         Input / output: Same as TwoLayerNet above.
         """
         X = X.astype(self.dtype)
-        mode = "test" if y is None else "train"
+        mode = 'test' if y is None else 'train'
 
         scores = None
         ############################################################################
@@ -231,13 +213,11 @@ class FullyConnectedNet(object):
         scores, cache = affine_forward(scores, w, b)
         reg_loss += 0.5 * self.reg * np.sum(w ** 2)
         caches.append(cache)
-
         ############################################################################
-        #                             END OF YOUR CODE                             #
         ############################################################################
 
         # If test mode return early
-        if mode == "test":
+        if mode == 'test':
             return scores
 
         loss, grads = 0.0, {}
@@ -266,7 +246,6 @@ class FullyConnectedNet(object):
             grads['W%d' % (i + 1)] = dw + self.reg * w
             grads['b%d' % (i + 1)] = db
         ############################################################################
-        #                             END OF YOUR CODE                             #
         ############################################################################
 
         return loss, grads

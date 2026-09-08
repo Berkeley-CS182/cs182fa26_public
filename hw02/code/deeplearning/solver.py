@@ -103,21 +103,21 @@ class Solver(object):
           training.
         """
         self.model = model
-        self.X_train = data["X_train"]
-        self.y_train = data["y_train"]
-        self.X_val = data["X_val"]
-        self.y_val = data["y_val"]
+        self.X_train = data['X_train']
+        self.y_train = data['y_train']
+        self.X_val = data['X_val']
+        self.y_val = data['y_val']
 
         # Unpack keyword arguments
-        self.update_rule = kwargs.pop("update_rule", "sgd")
-        self.optim_config = kwargs.pop("optim_config", {})
-        self.lr_decay = kwargs.pop("lr_decay", 1.0)
-        self.batch_size = kwargs.pop("batch_size", 100)
-        self.num_epochs = kwargs.pop("num_epochs", 10)
+        self.update_rule = kwargs.pop('update_rule', 'sgd')
+        self.optim_config = kwargs.pop('optim_config', {})
+        self.lr_decay = kwargs.pop('lr_decay', 1.0)
+        self.batch_size = kwargs.pop('batch_size', 100)
+        self.num_epochs = kwargs.pop('num_epochs', 10)
 
-        self.print_every = kwargs.pop("print_every", 10)
-        self.verbose = kwargs.pop("verbose", True)
-        self.log_acc_iteration = kwargs.pop("log_acc_iteration", False)
+        self.print_every = kwargs.pop('print_every', 10)
+        self.verbose = kwargs.pop('verbose', True)
+        self.log_acc_iteration = kwargs.pop('log_acc_iteration', False)
         self.record_grad_norm = kwargs.pop('record_grad_norm', False)
 
         if self.batch_size <= 0 or self.num_epochs <= 0:
@@ -127,8 +127,8 @@ class Solver(object):
 
         # Throw an error if there are extra keyword arguments
         if len(kwargs) > 0:
-            extra = ", ".join('"%s"' % k for k in kwargs.keys())
-            raise ValueError("Unrecognized arguments %s" % extra)
+            extra = ', '.join('"%s"' % k for k in kwargs.keys())
+            raise ValueError('Unrecognized arguments %s' % extra)
 
         # Make sure the update rule exists, then replace the string
         # name with the actual function
@@ -183,13 +183,11 @@ class Solver(object):
             self.optim_configs[p] = next_config
 
         #############################################################################
-        # TODO: Average the Euclidean norms of flattened weight/bias gradients.     #
         # Store the result in log_grad_norm_history.                                #
         #############################################################################
         if self.record_grad_norm:
-            raise NotImplementedError("Implement mean gradient-norm logging in Solver._step for the Initialization experiment.")
+            self.log_grad_norm_history.append(float(np.mean([np.linalg.norm(dw.ravel(), 2) for dw in grads.values()])))
         #############################################################################
-        #                             END OF YOUR CODE                              #
         #############################################################################
 
     def record_histories_as_npz(self, filename):
@@ -254,10 +252,7 @@ class Solver(object):
 
             # Maybe print training loss
             if self.verbose and t % self.print_every == 0:
-                print(
-                    "(Iteration %d / %d) loss: %f"
-                    % (t + 1, num_iterations, self.loss_history[-1])
-                )
+                print('(Iteration %d / %d) loss: %f' % (t + 1, num_iterations, self.loss_history[-1]))
 
             # At the end of every epoch, increment the epoch counter and decay the
             # learning rate.
@@ -265,16 +260,15 @@ class Solver(object):
             if epoch_end:
                 self.epoch += 1
                 for k in self.optim_configs:
-                    self.optim_configs[k]["learning_rate"] *= self.lr_decay
+                    self.optim_configs[k]['learning_rate'] *= self.lr_decay
 
             # Check train and val accuracy on the first iteration, the last
             # iteration, and at the end of each epoch.
-            first_it = t == 0
-            last_it = t == num_iterations + 1
+            first_it = (t == 0)
+            last_it = (t == num_iterations - 1)
             if first_it or last_it or epoch_end:
-                train_acc = self.check_accuracy(
-                    self.X_train, self.y_train, num_samples=1000
-                )
+                train_acc = self.check_accuracy(self.X_train, self.y_train,
+                                                num_samples=1000)
                 val_acc = self.check_accuracy(self.X_val, self.y_val)
                 if self.log_acc_iteration:
                     self.log_acc_iteration_history.append(t + 1)
@@ -282,10 +276,8 @@ class Solver(object):
                 self.val_acc_history.append(val_acc)
 
                 if self.verbose:
-                    print(
-                        "(Epoch %d / %d) train acc: %f; val_acc: %f"
-                        % (self.epoch, self.num_epochs, train_acc, val_acc)
-                    )
+                    print('(Epoch %d / %d) train acc: %f; val_acc: %f' % (
+                        self.epoch, self.num_epochs, train_acc, val_acc))
 
                 # Keep track of the best model
                 if val_acc > self.best_val_acc:

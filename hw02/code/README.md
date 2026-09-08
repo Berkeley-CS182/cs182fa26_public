@@ -1,85 +1,67 @@
-# CS 182/282A Fall 2026 — HW02 coding: optimization and initialization
+# CS 182/282A Fall 2026 — HW02 optimization and initialization experiments
 
-Open `hw2_optimizer_init.ipynb` from this directory, next to `deeplearning/`
-and `assignment_utils.py`. This is a NumPy assignment; PyTorch is not required.
+Run `hw2_optimizer_init.ipynb` from top to bottom and discuss the requested plots
+and measurements in the Q3 portion of your written PDF. All optimizer,
+initialization, gradient-logging, and training implementations are supplied.
+The default experiments require no code changes.
 
 ## Google Colab
 
-Open the [Fall 2026 notebook](https://colab.research.google.com/github/Berkeley-CS182/cs182fa26_public/blob/main/hw02/code/hw2_optimizer_init.ipynb).
-Run the setup cells. They mount Drive, create `MyDrive/cs182hw2_fa26`, clone
-the Fall 2026 public repository if needed, and download CIFAR-10. Setup reruns
-preserve the files you edit. Edit the accompanying Python files using Colab's
-Files pane.
+Open the [Fall 2026 notebook](https://colab.research.google.com/github/Berkeley-CS182/cs182fa26_public/blob/main/hw02/code/hw2_optimizer_init.ipynb)
+and run the setup cells. Setup first moves to `/content`, reconnects a stale
+Drive mount if necessary, and verifies that `MyDrive` is accessible.
 
-Before packaging, download your completed Colab notebook as an `.ipynb` file.
-In the Files pane, upload it into the assignment directory shown by setup,
-replacing `hw2_optimizer_init.ipynb` at this exact path:
+The persistent workspace is `MyDrive/cs182hw2_fa26`. Setup prints the exact
+experiment directory. If an existing `cs182fa26_public` checkout predates the
+supplied experiments, setup uses a separate `cs182fa26_public_q3_experiments_v1`
+checkout; older files and edits are preserved.
 
-`/content/drive/MyDrive/cs182hw2_fa26/cs182fa26_public/hw02/code/hw2_optimizer_init.ipynb`
-
-The ZIP helper reads this file from Drive. Saving a Colab copy elsewhere in
-Drive does not update it. After replacing the file, run the packaging cell.
-The helper prints the notebook path and rejects a saved copy whose final
-model-tuning hyperparameters still contain `None` placeholders. Saved outputs
-are optional.
-
-If Colab reports that automatic module reloading is unavailable, restart the
-runtime and rerun setup after editing a `.py` file so your changes are imported.
+Setup uses working installed NumPy, Matplotlib, and imageio packages immediately.
+Only missing packages trigger pip. Installation output is visible, network
+operations have a 20-second timeout and one retry, and the complete installer
+has a 180-second limit. If setup reports a failure, check the connection,
+restart the session, rerun setup, and complete any Drive authorization prompt.
+A failed import of an installed package reports a fresh-runtime recovery step.
+Automatic module reloading is optional; if it is unavailable and you edit Python
+files while exploring, restart the session and rerun the notebook.
 
 ## Local setup
 
-Use Python 3.11 or 3.12. From this directory:
+Use Python 3.11 or 3.12. From this directory, create and activate a virtual
+environment, then install the local environment and open JupyterLab:
 
 ```bash
 python -m venv .venv
-```
-
-Activate with `.venv\Scripts\Activate.ps1` on Windows PowerShell, or
-`source .venv/bin/activate` on macOS/Linux. Then run:
-
-```bash
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+# macOS/Linux: source .venv/bin/activate
 python -m pip install -r requirements.txt
-python assignment_utils.py
 python -m jupyterlab
 ```
 
-The dataset helper downloads the original CIFAR-10 Python archive from the
+Open this notebook next to `assignment_utils.py` and `deeplearning/`.
+The Colab-only Drive steps skip automatically on a local machine.
+
+## Experiments
+
+The notebook compares SGD and momentum, larger minibatches, adaptive optimizers,
+and zero/random/He initialization, then trains a deeper network with the supplied
+reference settings. Keep the supplied seeds and settings for the first run.
+To include the supplied optional RMSProp experiment, change
+`RUN_OPTIONAL_RMSPROP = False` to `True` in the imports cell.
+Optional exploration may change settings after the supplied run; use validation
+data for comparisons and evaluate the test subset only after choosing a model.
+
+Histories and measurements are written to `experiment_logs/` for your own
+inspection. Use the notebook's plots and measured values in your written
+PDF discussion.
+
+## CIFAR-10 data
+
+The helper downloads the original 170 MB CIFAR-10 Python archive from the
 [BrainChip mirror](https://data.brainchip.com/dataset-mirror/cifar10/cifar-10-python.tar.gz),
 with the [official Toronto server](https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz)
-as a fallback. Both sources must pass the original archive's MD5 checksum
-`c58f30108f718f92721af3b95e74349a` before safe extraction under
-`deeplearning/datasets/`. About 170 MB of download
-and several GB of working memory are needed for the complete experiment. The
-notebook's Colab-only steps skip automatically on a local machine.
-
-The helper prints download progress and uses a 60-second connection/read timeout
-for each source. A failed download or checksum triggers the fallback source;
-if both fail, it reports a retry option. You can also download the archive from the
-URL in that message, save `cifar-10-python.tar.gz` under `deeplearning/datasets/`,
-and rerun setup; a cached or manually supplied archive must pass the same checksum.
-
-## What to implement
-
-- `deeplearning/optim.py`: momentum and Adam; RMSProp is optional.
-- `deeplearning/classifiers/fc_net.py`: zero and He initialization.
-- `deeplearning/solver.py`: the mean of flattened weight/bias gradient norms,
-  recorded only when `record_grad_norm=True` in the initialization experiment.
-- Notebook: the SGD batch-size comparison and final model-tuning exercise.
-
-The affine/ReLU layers, model forward/backward passes, vanilla SGD, and the
-legacy two-layer network are supplied. Intentional implementation holes raise
-`NotImplementedError` with the function to complete. Finish each requested
-function before running that section. `RUN_OPTIONAL_RMSPROP=False` skips both
-RMSProp's test and its training experiment.
-
-## Submission
-
-Save the completed notebook to the exact path described above in Colab, or
-to `hw2_optimizer_init.ipynb` next to `assignment_utils.py` locally.
-Put the written initialization explanation and
-relevant plots in the homework's written PDF. Run the final packaging cell and
-submit `cs182hw2_fa26_submission.zip` to the HW02 code submission. It contains
-this notebook, the Python sources, and the experiment logs generated by your run;
-it excludes CIFAR-10, caches, and other homework notebooks. The helper reports
-missing required logs. Never submit saved logs from another person or earlier
-course offering. Tune only on the validation set, then evaluate the test set once.
+as fallback. Both sources must pass MD5 `c58f30108f718f92721af3b95e74349a`
+before safe extraction into `deeplearning/datasets/`. Progress is printed and
+each source uses a 60-second connection/read timeout. A verified archive saved
+manually to `deeplearning/datasets/cifar-10-python.tar.gz` is also accepted.
+The experiments use several GB of working memory; runtime varies by machine.
