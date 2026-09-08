@@ -21,14 +21,8 @@ class TwoLayerNet(object):
     self.params that maps parameter names to numpy arrays.
     """
 
-    def __init__(
-        self,
-        input_dim=3 * 32 * 32,
-        hidden_dim=100,
-        num_classes=10,
-        weight_scale=1e-2,
-        reg=0.0,
-    ):
+    def __init__(self, input_dim=3 * 32 * 32, hidden_dim=100, num_classes=10,
+                 weight_scale=1e-2, reg=0.0):
         """
         Initialize a new network.
 
@@ -36,7 +30,6 @@ class TwoLayerNet(object):
         - input_dim: An integer giving the size of the input
         - hidden_dim: An integer giving the size of the hidden layer
         - num_classes: An integer giving the number of classes to classify
-        - dropout: Scalar between 0 and 1 giving dropout strength.
         - weight_scale: Scalar giving the standard deviation for random
           initialization of the weights.
         - reg: Scalar giving L2 regularization strength.
@@ -45,14 +38,17 @@ class TwoLayerNet(object):
         self.reg = reg
 
         ############################################################################
-        # TODO: Initialize the weights and biases of the two-layer net. Weights    #
+        # Provided: Initialize the weights and biases of the two-layer net. Weights    #
         # should be initialized from a Gaussian with standard deviation equal to   #
         # weight_scale, and biases should be initialized to zero. All weights and  #
         # biases should be stored in the dictionary self.params, with first layer  #
         # weights and biases using the keys 'W1' and 'b1' and second layer weights #
         # and biases using the keys 'W2' and 'b2'.                                 #
         ############################################################################
-        pass  # TODO
+        self.params['W1'] = weight_scale * np.random.randn(input_dim, hidden_dim)
+        self.params['b1'] = np.zeros(hidden_dim)
+        self.params['W2'] = weight_scale * np.random.randn(hidden_dim, num_classes)
+        self.params['b2'] = np.zeros(num_classes)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -78,10 +74,12 @@ class TwoLayerNet(object):
         """
         scores = None
         ############################################################################
-        # TODO: Implement the forward pass for the two-layer net, computing the    #
+        # Provided: The forward pass for the two-layer net, computing the    #
         # class scores for X and storing them in the scores variable.              #
         ############################################################################
-        pass  # TODO
+        layer1_out, cache1 = affine_relu_forward(X, self.params['W1'], self.params['b1'])
+        layer2_out, cache2 = affine_forward(layer1_out, self.params['W2'], self.params['b2'])
+        scores = layer2_out
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -92,7 +90,7 @@ class TwoLayerNet(object):
 
         loss, grads = 0, {}
         ############################################################################
-        # TODO: Implement the backward pass for the two-layer net. Store the loss  #
+        # Provided: The backward pass for the two-layer net. Store the loss  #
         # in the loss variable and gradients in the grads dictionary. Compute data #
         # loss using softmax, and make sure that grads[k] holds the gradients for  #
         # self.params[k]. Don't forget to add L2 regularization on the weights,    #
@@ -102,7 +100,12 @@ class TwoLayerNet(object):
         # automated tests, make sure that your L2 regularization includes a factor #
         # of 0.5 to simplify the expression for the gradient.                      #
         ############################################################################
-        pass  # TODO
+        loss, dout = softmax_loss(scores, y)
+        loss += 0.5 * self.reg * (np.sum(self.params['W1'] ** 2)) + 0.5 * self.reg * (np.sum(self.params['W2'] ** 2))
+        dout, grads['W2'], grads['b2'] = affine_backward(dout, cache2)
+        _, grads['W1'], grads['b1'] = affine_relu_backward(dout, cache1)
+        grads['W2'] += self.reg * self.params['W2']
+        grads['W1'] += self.reg * self.params['W1']
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -114,12 +117,12 @@ class FullyConnectedNet(object):
     """
     A fully-connected neural network with an arbitrary number of hidden layers,
     ReLU nonlinearities, and a softmax loss function. This will also implement
-    dropout and batch normalization as options. For a network with L layers,
+    the affine/ReLU architecture used in HW02. For a network with L layers,
     the architecture will be
 
-    {affine - [batch norm] - relu - [dropout]} x (L - 1) - affine - softmax
+    {affine - relu} x (L - 1) - affine - softmax
 
-    where batch normalization and dropout are optional, and the {...} block is
+    where the {...} block is
     repeated L - 1 times.
 
     Similar to the TwoLayerNet above, learnable parameters are stored in the
@@ -146,18 +149,21 @@ class FullyConnectedNet(object):
         - hidden_dims: A list of integers giving the size of each hidden layer.
         - input_dim: An integer giving the size of the input.
         - num_classes: An integer giving the number of classes to classify.
-        - dropout: Scalar between 0 and 1 giving dropout strength. If dropout=0 then
-          the network should not use dropout at all.
+        - dropout, use_batchnorm: Reserved compatibility arguments; only
+          dropout=0 and use_batchnorm=False are supported in this assignment.
         - reg: Scalar giving L2 regularization strength.
         - weight_scale: Scalar giving the standard deviation for random
           initialization of the weights.
         - dtype: A numpy datatype object; all computations will be performed using
           this datatype. float32 is faster but less accurate, so you should use
           float64 for numeric gradient checking.
-        - seed: If not None, then pass this random seed to the dropout layers. This
-          will make the dropout layers deteriminstic so we can gradient check the
-          model.
+        - seed: Reserved compatibility argument. Set np.random.seed before
+          constructing the model to reproduce initialization.
         """
+        if dropout != 0 or use_batchnorm:
+            raise ValueError('HW02 supports affine/ReLU networks without dropout or batch normalization.')
+        if initialization not in ('random', 'he', 'zero'):
+            raise ValueError('initialization must be random, he, or zero.')
         self.reg = reg
         self.num_layers = 1 + len(hidden_dims)
         self.dtype = dtype
@@ -173,7 +179,7 @@ class FullyConnectedNet(object):
         # For He initialization, use fan_in mode assuming the activation is relu,  #
         # and initialize from a normal distribution.                               #
         ############################################################################
-        dims = np.hstack((input_dim, hidden_dims, num_classes))
+        dims = [input_dim, *hidden_dims, num_classes]
         for i in range(self.num_layers):
             if initialization == "random":
                 self.params["W%d" % (i + 1)] = (
@@ -183,7 +189,7 @@ class FullyConnectedNet(object):
                 ############################################################################
                 # TODO: YOUR CODE HERE                                                     #
                 ############################################################################
-                pass  # TODO
+                raise NotImplementedError("Implement the requested initialization in FullyConnectedNet.__init__.")
                 ############################################################################
                 #                             END OF YOUR CODE                             #
                 ############################################################################
@@ -191,7 +197,7 @@ class FullyConnectedNet(object):
                 ############################################################################
                 # TODO: YOUR CODE HERE                                                     #
                 ############################################################################
-                pass  # TODO
+                raise NotImplementedError("Implement the requested initialization in FullyConnectedNet.__init__.")
                 ############################################################################
                 #                             END OF YOUR CODE                             #
                 ############################################################################
@@ -211,7 +217,7 @@ class FullyConnectedNet(object):
 
         scores = None
         ############################################################################
-        # TODO: Implement the forward pass for the fully-connected net, computing  #
+        # Provided: The forward pass for the fully-connected net, computing  #
         # the class scores for X and storing them in the scores variable.          #
         #                                                                          #
         ############################################################################
@@ -236,7 +242,7 @@ class FullyConnectedNet(object):
 
         loss, grads = 0.0, {}
         ############################################################################
-        # TODO: Implement the backward pass for the fully-connected net. Store the #
+        # Provided: The backward pass for the fully-connected net. Store the #
         # loss in the loss variable and gradients in the grads dictionary. Compute #
         # data loss using softmax, and make sure that grads[k] holds the gradients #
         # for self.params[k]. Don't forget to add L2 regularization on the         #

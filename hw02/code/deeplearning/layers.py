@@ -147,10 +147,12 @@ def softmax_loss(x, y):
     - loss: Scalar giving the loss
     - dx: Gradient of the loss with respect to x
     """
-    probs = np.exp(x - np.max(x, axis=1, keepdims=True))
-    probs /= np.sum(probs, axis=1, keepdims=True)
+    # Compute log probabilities directly: log(exp(score)) can underflow.
+    shifted = x - np.max(x, axis=1, keepdims=True)
+    log_probs = shifted - np.log(np.sum(np.exp(shifted), axis=1, keepdims=True))
+    probs = np.exp(log_probs)
     N = x.shape[0]
-    loss = -np.sum(np.log(probs[np.arange(N), y])) / N
+    loss = -np.mean(log_probs[np.arange(N), y])
     dx = probs.copy()
     dx[np.arange(N), y] -= 1
     dx /= N

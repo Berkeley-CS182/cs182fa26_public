@@ -2,7 +2,10 @@ import os
 import pickle
 
 import numpy as np
-from imageio import imread
+try:
+    from imageio.v2 import imread
+except ImportError:  # Compatibility with older local ImageIO installations.
+    from imageio import imread
 
 
 def load_CIFAR_batch(filename):
@@ -12,7 +15,7 @@ def load_CIFAR_batch(filename):
         datadict = pickle.load(f, encoding='bytes')
         X = datadict[b'data']
         Y = datadict[b'labels']
-        X = X.reshape(10000, 3, 32, 32).transpose(0, 2, 3, 1).astype("float")
+        X = X.reshape(len(Y), 3, 32, 32).transpose(0, 2, 3, 1).astype("float")
         Y = np.array(Y)
         return X, Y
 
@@ -40,7 +43,7 @@ def get_CIFAR10_data(num_training=49000, num_validation=1000, num_test=1000):
     condensed to a single function.
     """
     # Load the raw CIFAR-10 data
-    cifar10_dir = 'deeplearning/datasets/cifar-10-batches-py'
+    cifar10_dir = os.path.join(os.path.dirname(__file__), 'datasets', 'cifar-10-batches-py')
     X_train, y_train, X_test, y_test = load_CIFAR10(cifar10_dir)
 
     # Subsample the data
@@ -113,8 +116,7 @@ def load_tiny_imagenet(path, dtype=np.float32):
     y_train = []
     for i, wnid in enumerate(wnids):
         if (i + 1) % 20 == 0:
-            print
-            'loading training data for synset %d / %d' % (i + 1, len(wnids))
+            print('loading training data for synset %d / %d' % (i + 1, len(wnids)))
         # To figure out the filenames we need to open the boxes file
         boxes_file = os.path.join(path, 'train', wnid, '%s_boxes.txt' % wnid)
         with open(boxes_file, 'r') as f:

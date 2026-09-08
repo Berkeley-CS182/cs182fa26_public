@@ -1,4 +1,4 @@
-# Get CIFAR10
-curl -OL http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
-tar -xzvf cifar-10-python.tar.gz
-rm cifar-10-python.tar.gz 
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+python assignment_utils.py

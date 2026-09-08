@@ -54,7 +54,7 @@ def sgd_momentum(w, dw, config=None):
     - momentum: Scalar between 0 and 1 giving the momentum value.
       Setting momentum = 0 reduces to sgd.
     - velocity: A numpy array of the same shape as w and dw used to store a moving
-      average of the gradients.
+      sum of the gradients (without a factor of 1 - momentum).
     """
     if config is None:
         config = {}
@@ -67,7 +67,7 @@ def sgd_momentum(w, dw, config=None):
     # TODO: Implement the momentum update formula. Store the updated value in   #
     # the next_w variable. You should also use and update the velocity v.       #
     #############################################################################
-    pass  # TODO
+    raise NotImplementedError("Implement sgd_momentum in deeplearning/optim.py.")
     #############################################################################
     #                             END OF YOUR CODE                              #
     #############################################################################
@@ -101,7 +101,7 @@ def rmsprop(w, dw, config=None):
     # in the next_w variable. Don't forget to update cache value stored in      #
     # config['cache'].                                                          #
     #############################################################################
-    pass  # TODO
+    raise NotImplementedError("Implement rmsprop in deeplearning/optim.py.")
     #############################################################################
     #                             END OF YOUR CODE                              #
     #############################################################################
@@ -139,7 +139,7 @@ def adam(w, dw, config=None):
     # the next_w variable. Don't forget to update the m, v, and t variables     #
     # stored in config.                                                         #
     #############################################################################
-    pass  # TODO
+    raise NotImplementedError("Implement adam in deeplearning/optim.py.")
     #############################################################################
     #                             END OF YOUR CODE                              #
     #############################################################################

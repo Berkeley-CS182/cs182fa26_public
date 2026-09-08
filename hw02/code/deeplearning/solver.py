@@ -1,3 +1,5 @@
+from copy import deepcopy
+from pathlib import Path
 import numpy as np
 
 from deeplearning import optim
@@ -116,6 +118,12 @@ class Solver(object):
         self.print_every = kwargs.pop("print_every", 10)
         self.verbose = kwargs.pop("verbose", True)
         self.log_acc_iteration = kwargs.pop("log_acc_iteration", False)
+        self.record_grad_norm = kwargs.pop('record_grad_norm', False)
+
+        if self.batch_size <= 0 or self.num_epochs <= 0:
+            raise ValueError('batch_size and num_epochs must be positive.')
+        if len(self.X_train) == 0 or len(self.X_val) == 0:
+            raise ValueError('Training and validation data must be nonempty.')
 
         # Throw an error if there are extra keyword arguments
         if len(kwargs) > 0:
@@ -137,8 +145,8 @@ class Solver(object):
         """
         # Set up some variables for book-keeping
         self.epoch = 0
-        self.best_val_acc = 0
-        self.best_params = {}
+        self.best_val_acc = -np.inf
+        self.best_params = {k: v.copy() for k, v in self.model.params.items()}
         self.loss_history = []
         self.train_acc_history = []
         self.val_acc_history = []
@@ -148,7 +156,7 @@ class Solver(object):
         # Make a deep copy of the optim_config for each parameter
         self.optim_configs = {}
         for p in self.model.params:
-            d = {k: v for k, v in self.optim_config.items()}
+            d = deepcopy(self.optim_config)
             self.optim_configs[p] = d
 
     def _step(self):
@@ -175,18 +183,23 @@ class Solver(object):
             self.optim_configs[p] = next_config
 
         #############################################################################
-        # TODO: Store the mean of l2 norm of each gradient in log_grad_norm_history #
+        # TODO: Average the Euclidean norms of flattened weight/bias gradients.     #
+        # Store the result in log_grad_norm_history.                                #
         #############################################################################
-        pass  # TODO
+        if self.record_grad_norm:
+            raise NotImplementedError("Implement mean gradient-norm logging in Solver._step for the Initialization experiment.")
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
 
     def record_histories_as_npz(self, filename):
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
         tl_hist = np.array(self.loss_history)
         ta_hist = np.array(self.train_acc_history)
         va_hist = np.array(self.val_acc_history)
-        np.savez(filename, train_losses=tl_hist, train_accs=ta_hist, val_accs=va_hist)
+        np.savez(filename, train_losses=tl_hist, train_accs=ta_hist, val_accs=va_hist,
+                 accuracy_iterations=np.array(self.log_acc_iteration_history),
+                 mean_gradient_norms=np.array(self.log_grad_norm_history))
 
     def check_accuracy(self, X, y, num_samples=None, batch_size=100):
         """
@@ -208,7 +221,7 @@ class Solver(object):
         # Maybe subsample the data
         N = X.shape[0]
         if num_samples is not None and N > num_samples:
-            mask = np.random.choice(N, num_samples)
+            mask = np.random.choice(N, num_samples, replace=False)
             N = num_samples
             X = X[mask]
             y = y[mask]
@@ -264,7 +277,7 @@ class Solver(object):
                 )
                 val_acc = self.check_accuracy(self.X_val, self.y_val)
                 if self.log_acc_iteration:
-                    self.log_acc_iteration_history.append(t)
+                    self.log_acc_iteration_history.append(t + 1)
                 self.train_acc_history.append(train_acc)
                 self.val_acc_history.append(val_acc)
 
