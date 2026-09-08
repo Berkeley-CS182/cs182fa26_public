@@ -22,8 +22,8 @@ operations have a 20-second timeout and one retry, and the complete installer
 has a 180-second limit. If setup reports a failure, check the connection,
 restart the session, rerun setup, and complete any Drive authorization prompt.
 A failed import of an installed package reports a fresh-runtime recovery step.
-Automatic module reloading is optional; if it is unavailable and you edit Python
-files while exploring, restart the session and rerun the notebook.
+After optional edits to helper `.py` files, restart the session and rerun the
+notebook from the top to load your changes.
 
 ## Local setup
 
