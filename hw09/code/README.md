@@ -46,3 +46,11 @@ These notebooks benchmark a direct `conv1d` implementation. They do not claim
 FFT convolution, a universal convolution speedup, or an absence of CPU
 parallelism. All released starter outputs are cleared and no reference
 implementations are included in the student code folder.
+
+## Problem 4: Hardware Check
+
+Use [hardware_check.py](hardware_check.py) and the
+[hardware setup guide](README-hardware.md) for the Qwen3.5 size ladder on your
+own machine. The runner performs the prescribed inference, training,
+quantization, and offloading checks. Submit only its `hardware-results.csv`;
+no written hardware analysis or modified benchmark code is required.
