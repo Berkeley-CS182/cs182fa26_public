@@ -64,6 +64,8 @@ backbones** with `Qwen3_5ForCausalLM`; no image/video inputs or vision training
 are used. `--download` permits model/tokenizer downloads as each size becomes
 needed. Downloads use SafeTensors and `trust_remote_code=False`, and their time
 is excluded from benchmark timing. The resolved checkpoint commit is recorded.
+The requested revision (such as `main`) is cached too, so the individual offline
+commands below work after downloading.
 Benchmark workers use cached files only, with Hugging Face offline mode enabled.
 
 The suite runs the following configurations in fresh processes. A mode advances
@@ -125,16 +127,25 @@ troubleshooting; they are not required for submission.
 Use the largest successful row for each mode as the measured hardware limit for
 this fixed workload. If all attempted sizes succeed, that is a valid completed
 ladder: do not force a failure. A timeout, allocator OOM, unsupported backend,
-or budget stop is also a valid result. A `missing_dependency` status requires completing the setup commands and rerunning; it is not a hardware limit. The CSV distinguishes these statuses;
-`worker_exit` only means the worker ended without returning a result.
+or budget stop is also a valid result. Exit code **0** means all requested runs
+completed; **2** means a resource/backend limit was recorded; **1** means a setup
+or runner error that must be fixed and rerun before submission. Check the CSV:
+`missing_dependency`, `error`, and `worker_exit` are not hardware limits.
+`worker_exit` means the worker exited abnormally or returned no valid result.
+Self-tests return 1 for any non-success, including resource limits.
 
 The suite allows at most **30 minutes of benchmark worker time**, with at most
 **180 seconds per configuration including loading**. Downloads are separately
 supervised, up to 30 minutes per size. `--timeout` and `--total-minutes` can lower
-these limits. By default, the worker's RSS is limited to at most 70% of available
-host RAM and the assignment's cache plus scratch to 32 GiB; at least 1 GiB of
+these limits. By default, one RSS cap is set to at most 70% of available
+host RAM at invocation start and held fixed across that suite. The assignment's
+cache plus scratch is limited to 32 GiB; at least 1 GiB of
 system RAM and disk remain reserved. Change `--disk-gib` to the storage budget
 available on your machine, or lower `--ram-gib` to keep more RAM free.
+After each worker, the runner sleeps for at least 5 seconds, then waits up to
+30 seconds total for available RAM to recover to 90% of its initial value.
+These pauses are excluded from benchmark timing; recovery details stay in the
+local JSONL. The live 1 GiB RAM reserve remains enforced if recovery is incomplete.
 Download/offload storage is checked before writing. The monitor is best-effort
 sampling, not an OS quota. Stop if the machine becomes unresponsive.
 

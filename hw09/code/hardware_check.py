@@ -25,6 +25,7 @@ MODELS = {s.lower(): "Qwen/Qwen3.5-" + s for s in ("0.8B", "2B", "4B", "9B")}
 PATTERNS = ["*.json", "*.safetensors", "*.model", "*.tiktoken", "tokenizer.*", "merges.txt", "vocab.*"]
 MODES = ["setup", "download", "fp32", "int8", "disk", "cpu-offload", "full", "lora", "qlora"]
 PRELOAD = ["Qwen3_5GatedDeltaNet"]
+LIMIT_STATUSES = {"oom", "timeout", "budget_stop", "unsupported"}
 CSV_FIELDS = ["os", "cpu", "host_ram_gib", "accelerator", "accelerator_memory_gib", "model", "revision",
               "mode", "device", "precision", "status", "worker_seconds", "tokens_per_second", "seconds_per_step",
               "peak_host_rss_gib", "device_allocated_gib", "device_memory_measurement",
@@ -123,10 +124,34 @@ def hardware():
     return result
 
 
+def result_exit_code(statuses, self_test=False):
+    """0: all completed; 2: measured limit; 1: setup/runner failure."""
+    if any(s != "ok" and (self_test or s not in LIMIT_STATUSES) for s in statuses):
+        return 1
+    return 2 if any(s != "ok" for s in statuses) else 0
+
+
+def wait_for_memory_recovery(initial_available):
+    import psutil
+    start = time.monotonic()
+    # Windows may release a terminated worker's CUDA/host allocations later.
+    time.sleep(5)
+    available = psutil.virtual_memory().available
+    while available < .9 * initial_available and time.monotonic() - start < 30:
+        time.sleep(min(1, max(0, 30 - (time.monotonic() - start))))
+        available = psutil.virtual_memory().available
+    return {"recovery_seconds": time.monotonic() - start,
+            "recovery_complete": available >= .9 * initial_available,
+            "available_ram_after_gib": available / GIB}
+
+
 def worker(a):
     from huggingface_hub import HfApi, snapshot_download
     if a.mode == "download":
-        info = HfApi().model_info(a.model, revision=a.revision, files_metadata=True)
+        api = HfApi()
+        # Cache the requested branch -> SHA mapping for later offline reruns.
+        resolved = api.resolve_revision(a.model, revision=a.revision, cache_dir=a.cache)
+        info = api.model_info(a.model, revision=resolved.resolved, files_metadata=True)
         wanted = [x for x in info.siblings if any(fnmatch.fnmatch(x.rfilename, pat) for pat in PATTERNS)]
         if any(x.size is None for x in wanted):
             raise BudgetStop("Unknown model-file size; cannot check storage budget")
@@ -328,7 +353,7 @@ def supervise(a, machine, remaining=None):
     a.worker_result = str(result_path.resolve())
     config_path.write_text(json.dumps(vars(a)), encoding="utf-8")
     available = psutil.virtual_memory().available
-    ram_limit = min(a.ram_gib * GIB if a.ram_gib else available * .7, available * .7, max(0, available - GIB))
+    ram_limit = a.ram_limit_bytes
     limit = min(a.download_timeout, 1800) if a.mode == "download" else min(180, a.timeout)
     if remaining is not None:
         limit = min(limit, max(0, remaining))
@@ -336,9 +361,11 @@ def supervise(a, machine, remaining=None):
             "mode": a.mode + ("+activation-offload" if a.activation_offload else ""), "device": a.device,
             "precision": "INT8 linear / FP32 other" if a.mode == "int8" else "NF4 frozen base / FP32 adapters+compute" if a.mode == "qlora" else "FP32",
             "versions": versions(), "rss_limit_bytes": ram_limit, "ram_limit_gib": ram_limit / GIB,
+            "initial_available_ram_gib": a.initial_available_ram / GIB,
+            "available_ram_before_gib": available / GIB,
             "disk_budget_gib": a.disk_gib, "timeout_seconds": limit,
             "stderr_log": str(stderr_path.resolve()), "status": "budget_stop"}
-    if ram_limit < .25 * GIB or limit <= 0:
+    if ram_limit < .25 * GIB or available < GIB or limit <= 0:
         base["error"] = "Insufficient RAM reserve or remaining suite time"
         write_result(a, base)
         return base
@@ -375,11 +402,19 @@ def supervise(a, machine, remaining=None):
                         except psutil.NoSuchProcess:
                             pass
                     proc.wait()
+                    psutil.wait_procs(processes, timeout=5)
                     break
             except psutil.NoSuchProcess:
                 pass
             time.sleep(.1)
-    result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {"status": "worker_exit", "error": "Worker exit code " + str(proc.returncode)}
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        if not isinstance(result, dict) or "status" not in result:
+            raise ValueError("Missing worker status")
+    except (OSError, ValueError):
+        result = {"status": "worker_exit", "error": "Missing or invalid worker result; exit code " + str(proc.returncode)}
+    if proc.returncode and not stopped:
+        result = {"status": "worker_exit", "error": "Worker exit code " + str(proc.returncode)}
     if stopped:
         result.update(status=stopped[0], error=stopped[1])
     base.update(result, peak_host_rss_gib=peak / GIB, rss_sampling_interval_seconds=.1,
@@ -388,6 +423,7 @@ def supervise(a, machine, remaining=None):
     scratch = Path(a.scratch).resolve()
     if scratch.exists() and scratch.parent == Path(a.offload).resolve() and scratch.name == "run-" + run_id:
         shutil.rmtree(scratch)
+    base.update(wait_for_memory_recovery(a.initial_available_ram))
     write_result(a, base)
     return base
 
@@ -430,6 +466,10 @@ def main():
         import psutil
         a.device = resolve_device(a.device)
         machine = hardware()
+        a.initial_available_ram = psutil.virtual_memory().available
+        # One comparable RSS cap for this invocation; retain the live 1 GiB reserve.
+        a.ram_limit_bytes = min(a.ram_gib * GIB if a.ram_gib else a.initial_available_ram * .7,
+                               a.initial_available_ram * .7, max(0, a.initial_available_ram - GIB))
     except ImportError as exc:
         write_result(a, {"os": platform.platform(), "cpu": platform.processor(), "model": a.model,
                         "revision": a.revision, "mode": a.mode or "suite", "device": a.device,
@@ -451,7 +491,7 @@ def main():
     if a.suite or a.self_test:
         plan = suite_plan(a.device, a.with_qlora)
         active = set(plan)
-        failures = 0
+        statuses = []
         remaining = min(30, a.total_minutes) * 60
         for model in a.models:
             if not active or remaining <= 0:
@@ -461,6 +501,7 @@ def main():
                 download = copy.copy(a)
                 download.mode, download.activation_offload = "download", False
                 loaded = supervise(download, machine)
+                statuses.append(loaded["status"])
                 if loaded["status"] != "ok":
                     break
                 a.revision = loaded["revision"]
@@ -470,16 +511,18 @@ def main():
                 run = copy.copy(a)
                 run.mode, run.device, run.activation_offload = mode, device, activation
                 result = supervise(run, machine, remaining)
+                statuses.append(result["status"])
                 remaining -= result.get("worker_seconds", 0)
                 if result["status"] != "ok":
-                    failures += 1
                     active.remove((mode, device, activation))
             a.revision = "main"
-        print("Finished. Submit only " + str(Path(a.output).resolve()) + ". Largest successful rows give measured limits.")
-        if a.self_test and failures:
-            raise SystemExit("Self-test failed in " + str(failures) + " configuration(s); see local logs.")
+        code = result_exit_code(statuses, a.self_test)
+        print("Finished. Results: " + str(Path(a.output).resolve()) +
+              (". Fix error rows and rerun before submitting." if code == 1 else ". Submit only this CSV."))
+        raise SystemExit(code)
     else:
-        supervise(a, machine)
+        result = supervise(a, machine)
+        raise SystemExit(result_exit_code([result["status"]]))
 
 
 if __name__ == "__main__":
