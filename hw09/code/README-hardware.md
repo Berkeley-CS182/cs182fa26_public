@@ -55,11 +55,11 @@ staff if the CPU setup or smallest CPU baseline cannot complete.
 ## 2. Launch the fixed stress test
 
 ```text
-PY hardware_check.py --suite --models 0.8b 2b 4b --device auto --download
+PY hardware_check.py --suite --device auto --download
 ```
 
-The aliases select `Qwen/Qwen3.5-0.8B`, `Qwen/Qwen3.5-2B`, and
-`Qwen/Qwen3.5-4B`, in that order. The runner explicitly loads their **text
+The default ladder selects `Qwen/Qwen3.5-0.8B`, `Qwen/Qwen3.5-2B`,
+`Qwen/Qwen3.5-4B`, and `Qwen/Qwen3.5-9B`, in that order. The runner explicitly loads their **text
 backbones** with `Qwen3_5ForCausalLM`; no image/video inputs or vision training
 are used. `--download` permits model/tokenizer downloads as each size becomes
 needed. Downloads use SafeTensors and `trust_remote_code=False`, and their time
@@ -99,14 +99,8 @@ model download cache is retained. Both offload inference modes preload
 `Qwen3_5GatedDeltaNet` weights because its convolution weights are accessed
 directly. Training does not use inference dispatch hooks.
 
-If time and storage remain, adding `9b` to `--models` is optional. To avoid
-repeating earlier sizes, run an individual mode at 9B only after that mode
-succeeded at 4B. For example:
-
-```text
-PY hardware_check.py --mode download --model 9b
-PY hardware_check.py --mode fp32 --model 9b --device auto
-```
+The suite reaches 9B only for modes that succeeded at 4B and while benchmark
+time and storage remain. Use `--models 0.8b 2b 4b` to request a shorter ladder.
 
 For optional CUDA QLoRA, install a supported stable
 [bitsandbytes wheel](https://huggingface.co/docs/bitsandbytes/installation) with

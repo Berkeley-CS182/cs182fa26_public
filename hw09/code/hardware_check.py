@@ -40,7 +40,7 @@ def arguments():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode", choices=MODES)
     p.add_argument("--suite", action="store_true")
-    p.add_argument("--models", nargs="+", default=["0.8b", "2b", "4b"])
+    p.add_argument("--models", nargs="+", default=["0.8b", "2b", "4b", "9b"])
     p.add_argument("--model", default="0.8b", help="0.8b, 2b, 4b, 9b, or official Qwen3.5 Hub ID")
     p.add_argument("--revision", default="main", help="fixed commit SHA for a single model")
     p.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
