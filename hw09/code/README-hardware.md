@@ -2,7 +2,7 @@
 
 You must understand your hardware to do a good job on the project. Set up a local
 Python environment, run the supplied fixed workloads, and find the largest
-**successfully tested** Qwen3.5 size for each mode within the experiment's budget.
+**successfully tested** model size for each mode within the experiment's budget.
 Only `hardware-results.csv` is submitted. The runner writes it automatically; no
 written answers, screenshots, environment export, or edited code are required.
 Model size earns no extra credit.
@@ -59,9 +59,14 @@ PY hardware_check.py --suite --device auto --download
 ```
 
 The default ladder selects `Qwen/Qwen3.5-0.8B`, `Qwen/Qwen3.5-2B`,
-`Qwen/Qwen3.5-4B`, and `Qwen/Qwen3.5-9B`, in that order. The runner explicitly loads their **text
+`Qwen/Qwen3.5-4B`, and `Qwen/Qwen3.5-9B`, in that order. It then independently
+tests `inclusionAI/Ling-3.0-tiny` (alias `ling`) and
+`JetBrains/Mellum2.1-12B-A2.5B-Thinking` (alias `mellum`).
+The runner explicitly loads the Qwen models' **text
 backbones** with `Qwen3_5ForCausalLM`; no image/video inputs or vision training
-are used. `--download` permits model/tokenizer downloads as each size becomes
+are used. Ling and Mellum use native `AutoModelForCausalLM` support in the
+pinned Transformers version, with eager expert execution and no remote code.
+`--download` permits model/tokenizer downloads as each size becomes
 needed. Downloads use SafeTensors and `trust_remote_code=False`, and their time
 is excluded from benchmark timing. The resolved checkpoint commit is recorded.
 The requested revision (such as `main`) is cached too, so the individual offline
@@ -69,7 +74,17 @@ commands below work after downloading.
 Benchmark workers use cached files only, with Hugging Face offline mode enabled.
 
 The suite runs the following configurations in fresh processes. A mode advances
-to the next size only after success at its current size.
+to the next Qwen size only after success at its current size. Ling and Mellum
+each start with all applicable modes, even if a Qwen mode or another model's
+download failed. All families share the same time and storage budgets.
+Use `--models ling mellum` to run only the two additional models.
+
+Ling has about **7.9B total / 1.3B active** parameters; Mellum has
+**12B total / 2.5B active**. Active parameters describe computation per token,
+not the amount of weight storage. Their original checkpoints occupy roughly
+15.8 GB and 24.3 GB, respectively, before FP32 conversion. Retaining earlier
+checkpoints can exhaust the default 32 GiB cache/scratch budget; that is a
+recorded storage limit. Increase `--disk-gib` only to fit your available storage.
 
 | Mode in CSV | Concrete workload |
 | --- | --- |
@@ -91,13 +106,17 @@ alpha 16, zero dropout, and `target_modules="all-linear"`. A successful row
 requires completed generation or both finite-loss training steps.
 
 INT8 reports its engine and actual packed modules in the local JSON. Other
-parameters remain FP32. It first loads an FP32 model, so it measures the limits
+parameters remain FP32, including fused MoE expert tensors that are not
+`nn.Linear` modules. Thus this INT8 mode does not quantize every MoE weight.
+It first loads an FP32 model, so it measures the limits
 of this concrete loading path as well as execution. Disk offload also first
 loads FP32 weights in RAM; it is not a demonstration of loading a model larger
 than RAM. Its per-run scratch files are removed after the worker exits. The
 model download cache is retained. Both offload inference modes preload
-`Qwen3_5GatedDeltaNet` weights because its convolution weights are accessed
-directly. Training does not use inference dispatch hooks.
+`Qwen3_5GatedDeltaNet` and `BailingHybridDeltaAttention` weights because their
+convolution weights are accessed directly. Training does not use inference
+dispatch hooks. LoRA uses PEFT's supported targets; the JSON records the actual
+trainable parameter count, and not every model uses identical adapter targets.
 
 The suite reaches 9B only for modes that succeeded at 4B and while benchmark
 time and storage remain. Use `--models 0.8b 2b 4b` to request a shorter ladder.
@@ -105,8 +124,9 @@ time and storage remain. Use `--models 0.8b 2b 4b` to request a shorter ladder.
 For optional CUDA QLoRA, install a supported stable
 [bitsandbytes wheel](https://huggingface.co/docs/bitsandbytes/installation) with
 `PY -m pip install bitsandbytes`, then add `--with-qlora` to the suite command.
-This adds NF4 frozen-base adapter training with FP32 compute and two complete
+This adds NF4 linear-weight adapter training with FP32 compute and two complete
 updates. It uses a single CUDA device, not inference `device_map="auto"`.
+Nonlinear-module weights, including unsupported fused experts, remain FP32.
 QLoRA and accelerator modes are optional when unsupported. An unsupported
 backend is a reported limit, not an instruction to compile native kernels.
 
@@ -131,7 +151,7 @@ Self-tests return 1 for any non-success, including resource limits.
 The suite allows at most **30 minutes of benchmark worker time**, with at most
 **180 seconds per configuration including loading**. Downloads are separately
 supervised, up to 30 minutes per size. `--timeout` and `--total-minutes` can lower
-these limits. By default, one RSS cap is set to at most 70% of available
+these limits. By default, one RSS cap is set to at most 95% of available
 host RAM at invocation start and held fixed across that suite. The assignment's
 cache plus scratch is limited to 32 GiB; at least 1 GiB of
 system RAM and disk remain reserved. Change `--disk-gib` to the storage budget
@@ -151,7 +171,7 @@ not add these values as independent physical memories. This exercise measures
 successful tested sizes under stated limits, not a universal maximum model size.
 
 For a single rerun, use `--mode fp32|int8|disk|full|lora|cpu-offload|qlora`,
-`--model 0.8b|2b|4b|9b`, and the actual `--device`. INT8/disk require CPU;
+`--model 0.8b|2b|4b|9b|ling|mellum`, and the actual `--device`. INT8/disk require CPU;
 CPU-offload/QLoRA require CUDA. `--activation-offload` can be added to CUDA
 training modes. `--revision COMMIT_SHA` fixes a single-model run to the recorded
 revision. `--dry-run` prints a plan without validating dependencies or hardware.
@@ -159,6 +179,8 @@ revision. `--dry-run` prints a plan without validating dependencies or hardware.
 CSV; those checks do not count as student model measurements.
 
 Official references: [Qwen3.5 models](https://huggingface.co/Qwen/Qwen3.5-0.8B),
+[Ling-3.0-tiny](https://huggingface.co/inclusionAI/Ling-3.0-tiny),
+[Mellum2.1 Thinking](https://huggingface.co/JetBrains/Mellum2.1-12B-A2.5B-Thinking),
 [Transformers text-only class](https://huggingface.co/docs/transformers/model_doc/qwen3_5),
 [dynamic INT8](https://docs.pytorch.org/docs/stable/generated/torch.ao.quantization.quantize_dynamic.html),
 [Accelerate offload](https://huggingface.co/docs/accelerate/package_reference/big_modeling),

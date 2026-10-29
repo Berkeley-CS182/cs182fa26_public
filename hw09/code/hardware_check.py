@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded Qwen3.5 hardware probe. Submit hardware-results.csv; see README-hardware.md.
+"""Bounded local LLM hardware probe. Submit hardware-results.csv; see README-hardware.md.
 
 Only --mode download or --suite --download uses the network. Every configuration
 runs in a fresh child process. Detailed JSON/logs stay local and need not be submitted.
@@ -22,9 +22,11 @@ import traceback
 
 GIB = 2 ** 30
 MODELS = {s.lower(): "Qwen/Qwen3.5-" + s for s in ("0.8B", "2B", "4B", "9B")}
+MODELS.update({"ling": "inclusionAI/Ling-3.0-tiny",
+               "mellum": "JetBrains/Mellum2.1-12B-A2.5B-Thinking"})
 PATTERNS = ["*.json", "*.safetensors", "*.model", "*.tiktoken", "tokenizer.*", "merges.txt", "vocab.*"]
 MODES = ["setup", "download", "fp32", "int8", "disk", "cpu-offload", "full", "lora", "qlora"]
-PRELOAD = ["Qwen3_5GatedDeltaNet"]
+PRELOAD = ["Qwen3_5GatedDeltaNet", "BailingHybridDeltaAttention"]
 LIMIT_STATUSES = {"oom", "timeout", "budget_stop", "unsupported"}
 CSV_FIELDS = ["os", "cpu", "host_ram_gib", "accelerator", "accelerator_memory_gib", "model", "revision",
               "mode", "device", "precision", "status", "worker_seconds", "tokens_per_second", "seconds_per_step",
@@ -40,8 +42,8 @@ def arguments():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode", choices=MODES)
     p.add_argument("--suite", action="store_true")
-    p.add_argument("--models", nargs="+", default=["0.8b", "2b", "4b", "9b"])
-    p.add_argument("--model", default="0.8b", help="0.8b, 2b, 4b, 9b, or official Qwen3.5 Hub ID")
+    p.add_argument("--models", nargs="+", default=["0.8b", "2b", "4b", "9b", "ling", "mellum"])
+    p.add_argument("--model", default="0.8b", help="0.8b, 2b, 4b, 9b, ling, mellum, or Hub ID")
     p.add_argument("--revision", default="main", help="fixed commit SHA for a single model")
     p.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     p.add_argument("--download", action="store_true", help="permit suite downloads as each size is needed")
@@ -51,7 +53,7 @@ def arguments():
     p.add_argument("--timeout", type=float, default=180, help="seconds per benchmark, including loading; capped at 180")
     p.add_argument("--total-minutes", type=float, default=30, help="suite benchmark budget; capped at 30; downloads excluded")
     p.add_argument("--download-timeout", type=float, default=1800)
-    p.add_argument("--ram-gib", type=float, help="worker RSS cap; default at most 70%% of available RAM")
+    p.add_argument("--ram-gib", type=float, help="worker RSS cap; default at most 95%% of available RAM")
     p.add_argument("--disk-gib", type=float, default=32, help="combined assignment cache and scratch budget")
     p.add_argument("--threads", type=int, default=4)
     p.add_argument("--activation-offload", action="store_true")
@@ -172,7 +174,7 @@ def worker(a):
                 "download_seconds": time.perf_counter() - start, "estimated_download_bytes": needed}
 
     import torch
-    from transformers import AutoTokenizer, Qwen3_5ForCausalLM
+    from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen3_5ForCausalLM
     torch.manual_seed(0)
     torch.set_num_threads(a.threads)
     if a.device == "cuda" and not torch.cuda.is_available():
@@ -224,8 +226,11 @@ def worker(a):
             from transformers import BitsAndBytesConfig
             kw.update(quantization_config=BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=torch.float32), device_map={"": 0})
-        # Explicit text backbone of a multimodal checkpoint; no vision training.
-        model = Qwen3_5ForCausalLM.from_pretrained(snapshot, **kw)
+        # Keep Qwen's explicit text backbone; the other families have native text models.
+        loader = Qwen3_5ForCausalLM if a.model.startswith("Qwen/Qwen3.5-") else AutoModelForCausalLM
+        if loader is AutoModelForCausalLM:
+            kw["experts_implementation"] = "eager"
+        model = loader.from_pretrained(snapshot, **kw)
         text = "Attention combines information from earlier tokens. " * 128
         ids = tokenizer(text, return_tensors="pt", add_special_tokens=False)["input_ids"][:, :128]
     if ids.shape[1] != 128:
@@ -265,7 +270,7 @@ def worker(a):
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
         if a.mode == "qlora":
             model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
-            result["precision"] = "NF4 frozen base / FP32 adapters+compute"
+            result["precision"] = "NF4 linear / FP32 other+adapters+compute"
         model = get_peft_model(model, LoraConfig(r=8, lora_alpha=16, lora_dropout=0,
             bias="none", target_modules="all-linear", task_type="CAUSAL_LM"))
     ids = ids.to(a.device)
@@ -359,7 +364,7 @@ def supervise(a, machine, remaining=None):
         limit = min(limit, max(0, remaining))
     base = {**machine, "model": a.model, "requested_revision": a.revision, "revision": a.revision,
             "mode": a.mode + ("+activation-offload" if a.activation_offload else ""), "device": a.device,
-            "precision": "INT8 linear / FP32 other" if a.mode == "int8" else "NF4 frozen base / FP32 adapters+compute" if a.mode == "qlora" else "FP32",
+            "precision": "INT8 linear / FP32 other" if a.mode == "int8" else "NF4 linear / FP32 other+adapters+compute" if a.mode == "qlora" else "FP32",
             "versions": versions(), "rss_limit_bytes": ram_limit, "ram_limit_gib": ram_limit / GIB,
             "initial_available_ram_gib": a.initial_available_ram / GIB,
             "available_ram_before_gib": available / GIB,
@@ -440,6 +445,11 @@ def suite_plan(device, optional_qlora=False):
     return plan
 
 
+def model_family(model):
+    # Stop increasing Qwen sizes after a limit, but still test independent MoE models.
+    return "qwen3.5" if model.startswith("Qwen/Qwen3.5-") else model
+
+
 def main():
     a = arguments()
     if a.worker_config:
@@ -468,8 +478,8 @@ def main():
         machine = hardware()
         a.initial_available_ram = psutil.virtual_memory().available
         # One comparable RSS cap for this invocation; retain the live 1 GiB reserve.
-        a.ram_limit_bytes = min(a.ram_gib * GIB if a.ram_gib else a.initial_available_ram * .7,
-                               a.initial_available_ram * .7, max(0, a.initial_available_ram - GIB))
+        a.ram_limit_bytes = min(a.ram_gib * GIB if a.ram_gib else a.initial_available_ram * .95,
+                               a.initial_available_ram * .95, max(0, a.initial_available_ram - GIB))
     except ImportError as exc:
         write_result(a, {"os": platform.platform(), "cpu": platform.processor(), "model": a.model,
                         "revision": a.revision, "mode": a.mode or "suite", "device": a.device,
@@ -490,12 +500,15 @@ def main():
             a.output = "hardware-self-test.csv"
     if a.suite or a.self_test:
         plan = suite_plan(a.device, a.with_qlora)
-        active = set(plan)
+        active_by_family = {}
         statuses = []
         remaining = min(30, a.total_minutes) * 60
         for model in a.models:
-            if not active or remaining <= 0:
+            if remaining <= 0:
                 break
+            active = active_by_family.setdefault(model_family(model), set(plan))
+            if not active:
+                continue
             a.model = model
             if a.download:
                 download = copy.copy(a)
@@ -503,7 +516,9 @@ def main():
                 loaded = supervise(download, machine)
                 statuses.append(loaded["status"])
                 if loaded["status"] != "ok":
-                    break
+                    active.clear()
+                    a.revision = "main"
+                    continue
                 a.revision = loaded["revision"]
             for mode, device, activation in plan:
                 if (mode, device, activation) not in active:
