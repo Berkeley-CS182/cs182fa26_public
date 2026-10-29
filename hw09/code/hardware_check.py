@@ -10,6 +10,8 @@ import copy
 import csv
 import fnmatch
 import importlib.metadata
+import inspect
+import math
 import json
 import os
 from pathlib import Path
@@ -19,6 +21,7 @@ import subprocess
 import sys
 import time
 import traceback
+from types import MethodType
 
 GIB = 2 ** 30
 MODELS = {s.lower(): "Qwen/Qwen3.5-" + s for s in ("0.8B", "2B", "4B", "9B")}
@@ -36,6 +39,84 @@ CSV_FIELDS = ["os", "cpu", "host_ram_gib", "accelerator", "accelerator_memory_gi
 
 class BudgetStop(RuntimeError):
     pass
+
+
+# Ling compatibility recovered from the validated Linux run; kept inline so
+# students still need to download only this script.
+EXPECTED_TRANSFORMERS = "5.21.0"
+CHECKPOINT_REVISION = "9a98e35fe1c9ee255f78dd64771c7ae15a799481"
+SOURCE_URL = "https://huggingface.co/inclusionAI/Ling-3.0-tiny/blob/9a98e35fe1c9ee255f78dd64771c7ae15a799481/modeling_bailing_moe_v3.py"
+COMPATIBILITY_ID = "ling-native-5.21-float-kda-and-lowrank-mla-v1"
+
+
+def _project_low_rank_query(self, hidden_states):
+    return self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
+
+
+def install_attention_compatibility():
+    """Install an idempotent process-local patch, enabled by a config flag only."""
+    import torch
+    import transformers
+    from transformers.models.bailing_hybrid import modeling_bailing_hybrid as native
+
+    if transformers.__version__ != EXPECTED_TRANSFORMERS:
+        raise RuntimeError(f"Ling compatibility requires Transformers {EXPECTED_TRANSFORMERS}; re-review other versions")
+    cls = native.BailingHybridAttention
+    if getattr(cls, "_hw09_compatibility_id", None) == COMPATIBILITY_ID:
+        return
+    original_init = cls.__init__
+    original_forward = cls.forward
+    if "q_states = self.q_proj(hidden_states)" not in inspect.getsource(original_forward):
+        raise RuntimeError("Native Ling attention forward changed; compatibility needs review")
+    if "self.q_a_proj" in inspect.getsource(original_init):
+        raise RuntimeError("Native Ling already implements low-rank queries; compatibility needs review")
+
+    def compatible_init(self, config, layer_idx):
+        original_init(self, config, layer_idx)
+        if not getattr(config, "_hw09_ling_q_lora_compat", False):
+            return
+        rank = getattr(config, "q_lora_rank", None)
+        if type(rank) is not int or rank <= 0:
+            raise ValueError("Ling compatibility requires a positive integer q_lora_rank")
+        del self.q_proj
+        self.q_a_proj = torch.nn.Linear(config.hidden_size, rank, bias=config.use_qkv_bias)
+        # The original reference uses RMSNorm's default epsilon, 1e-6.
+        self.q_a_layernorm = native.BailingHybridRMSNorm(rank, eps=1e-6)
+        self.q_b_proj = torch.nn.Linear(rank, self.num_heads * self.qk_head_dim, bias=False)
+        # A bound callable is deliberately not an nn.Module: the three modules
+        # above keep their exact checkpoint names and remain individually visible
+        # to PEFT, dynamic quantization, and Accelerate forward hooks.
+        self.q_proj = MethodType(_project_low_rank_query, self)
+
+    cls.__init__ = compatible_init
+    cls._hw09_compatibility_id = COMPATIBILITY_ID
+
+
+def prepare_ling_config(snapshot):
+    """Read and normalize the identified Ling checkpoint without modifying it."""
+    from transformers import BailingHybridConfig
+
+    snapshot = Path(snapshot)
+    if snapshot.name != CHECKPOINT_REVISION:
+        raise ValueError("Ling compatibility is restricted to the reviewed checkpoint revision")
+    data = json.loads((snapshot / "config.json").read_text())
+    expected = {
+        "model_type": "bailing_hybrid", "architectures": ["BailingMoeV3ForCausalLM"],
+        "q_lora_rank": 256, "hidden_size": 1536, "num_hidden_layers": 24,
+        "num_experts": 128, "num_nextn_predict_layers": 0,
+        "use_qkv_bias": False, "gated_attention_proj_granularity_type": "head_wise",
+        "rope_interleave": True, "rms_norm_eps": 1e-6,
+    }
+    changed = {k: (data.get(k), v) for k, v in expected.items() if data.get(k) != v}
+    if changed:
+        raise ValueError(f"Ling checkpoint differs from reviewed architecture: {changed}")
+    if data.get("kda_lower_bound") != -5:
+        raise ValueError("Ling kda_lower_bound differs from reviewed value")
+    data["kda_lower_bound"] = float(data["kda_lower_bound"])
+    config = BailingHybridConfig.from_dict(data)
+    config._hw09_ling_q_lora_compat = True
+    install_attention_compatibility()
+    return config
 
 
 def arguments():
@@ -68,8 +149,12 @@ def arguments():
         p.error("choose exactly one of --mode, --suite, or --self-test")
     a.model = MODELS.get(a.model.lower(), a.model)
     a.models = [MODELS.get(x.lower(), x) for x in a.models]
-    if min(a.timeout, a.total_minutes, a.download_timeout, a.disk_gib, a.threads) <= 0 or (a.ram_gib is not None and a.ram_gib <= 0):
-        p.error("time, storage, threads, and RAM limits must be positive")
+    for name in ("timeout", "total_minutes", "download_timeout", "disk_gib", "ram_gib"):
+        value = getattr(a, name)
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            p.error("--" + name.replace("_", "-") + " must be finite and positive")
+    if a.threads <= 0:
+        p.error("--threads must be positive")
     if a.suite and len(a.models) > 1 and a.revision != "main":
         p.error("a commit SHA belongs to one model; use --model and --mode for fixed-revision individual runs")
     if a.mode in ("int8", "disk") and a.device not in ("cpu", "auto"):
@@ -79,6 +164,8 @@ def arguments():
     if a.activation_offload and (a.device not in ("cuda", "auto") or a.mode not in ("full", "lora", "qlora")):
         p.error("activation offload requires a CUDA training mode")
     a.tiny = False
+    if not a.suite:
+        a.revision = model_revision(a.model, a.revision)
     return a
 
 
@@ -93,8 +180,23 @@ def folder_bytes(path):
     return total
 
 
+def cpu_name():
+    name = platform.processor().strip()
+    if name:
+        return name
+    if sys.platform.startswith("linux"):
+        try:
+            for line in Path("/proc/cpuinfo").read_text().splitlines():
+                key, separator, value = line.partition(":")
+                if separator and key.strip() in ("model name", "Hardware", "Processor") and value.strip():
+                    return value.strip()
+        except OSError:
+            pass
+    return platform.machine() or "unknown"
+
+
 def versions():
-    result = {"python": platform.python_version(), "os": platform.platform(), "cpu": platform.processor()}
+    result = {"python": platform.python_version(), "os": platform.platform(), "cpu": cpu_name()}
     for name in ("torch", "transformers", "accelerate", "peft", "bitsandbytes", "psutil"):
         try:
             result[name] = importlib.metadata.version(name)
@@ -113,7 +215,7 @@ def resolve_device(requested):
 def hardware():
     import psutil
     import torch
-    result = {"os": platform.platform(), "cpu": platform.processor(),
+    result = {"os": platform.platform(), "cpu": cpu_name(),
               "host_ram_gib": psutil.virtual_memory().total / GIB,
               "accelerator": "none", "accelerator_memory_gib": ""}
     if torch.cuda.is_available():
@@ -145,6 +247,19 @@ def wait_for_memory_recovery(initial_available):
     return {"recovery_seconds": time.monotonic() - start,
             "recovery_complete": available >= .9 * initial_available,
             "available_ram_after_gib": available / GIB}
+
+
+def validate_ling_loading(model, loading_info, revision, worker_result):
+    diagnostics = {"compatibility_id": COMPATIBILITY_ID, "revision": revision,
+                   "parameter_count": model.num_parameters(),
+                   "loading_info": {k: sorted(str(x) for x in v) if isinstance(v, (set, list, tuple)) else v
+                                    for k, v in loading_info.items()}}
+    Path(worker_result).with_suffix(".loading.json").write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
+    if any(loading_info.get(k) for k in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
+        raise RuntimeError("Ling checkpoint did not load cleanly: " + str(diagnostics))
+    if diagnostics["parameter_count"] != 7_893_389_856:
+        raise RuntimeError("Ling parameter count differs from the audited checkpoint")
+    return diagnostics
 
 
 def worker(a):
@@ -219,9 +334,13 @@ def worker(a):
         snapshot = snapshot_download(a.model, revision=a.revision, cache_dir=a.cache,
                                      local_files_only=True, allow_patterns=PATTERNS)
         revision = Path(snapshot).name
-        tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
+        config_kwargs = {}
+        if a.model == MODELS["ling"]:
+            config_kwargs["config"] = prepare_ling_config(snapshot)
+        tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True,
+                                                  trust_remote_code=False, **config_kwargs)
         kw = dict(local_files_only=True, trust_remote_code=False, use_safetensors=True,
-                  dtype=torch.float32, attn_implementation="eager")
+                  dtype=torch.float32, attn_implementation="eager", **config_kwargs)
         if a.mode == "qlora":
             from transformers import BitsAndBytesConfig
             kw.update(quantization_config=BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
@@ -230,7 +349,11 @@ def worker(a):
         loader = Qwen3_5ForCausalLM if a.model.startswith("Qwen/Qwen3.5-") else AutoModelForCausalLM
         if loader is AutoModelForCausalLM:
             kw["experts_implementation"] = "eager"
-        model = loader.from_pretrained(snapshot, **kw)
+        if a.model == MODELS["ling"]:
+            model, loading_info = loader.from_pretrained(snapshot, output_loading_info=True, **kw)
+            diagnostics = validate_ling_loading(model, loading_info, revision, a.worker_result)
+        else:
+            model = loader.from_pretrained(snapshot, **kw)
         text = "Attention combines information from earlier tokens. " * 128
         ids = tokenizer(text, return_tensors="pt", add_special_tokens=False)["input_ids"][:, :128]
     if ids.shape[1] != 128:
@@ -238,6 +361,8 @@ def worker(a):
     result = {"revision": revision, "parameter_count": model.num_parameters(), "input_tokens": 128,
               "batch_size": 1, "seed": 0, "device": a.device, "precision": "FP32",
               "quantized_linear_modules": 0}
+    if not a.tiny and a.model == MODELS["ling"]:
+        result.update(compatibility_id=COMPATIBILITY_ID, checkpoint_loading=diagnostics)
     if a.mode == "int8":
         engines = torch.backends.quantized.supported_engines
         engine = next((x for x in ("x86", "fbgemm", "qnnpack", "onednn") if x in engines), None)
@@ -370,6 +495,10 @@ def supervise(a, machine, remaining=None):
             "available_ram_before_gib": available / GIB,
             "disk_budget_gib": a.disk_gib, "timeout_seconds": limit,
             "stderr_log": str(stderr_path.resolve()), "status": "budget_stop"}
+    if a.model == MODELS["ling"]:
+        base.update(compatibility_id=COMPATIBILITY_ID, runner_file=str(Path(__file__).resolve()))
+    if a.model == MODELS["mellum"] and a.mode != "download":
+        base["checkpoint_loading_strategy"] = "sequential (HF_DEACTIVATE_ASYNC_LOAD=1)"
     if ram_limit < .25 * GIB or available < GIB or limit <= 0:
         base["error"] = "Insufficient RAM reserve or remaining suite time"
         write_result(a, base)
@@ -382,6 +511,8 @@ def supervise(a, machine, remaining=None):
         env = os.environ.copy()
         if a.mode != "download":
             env.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+            if a.model == MODELS["mellum"]:
+                env["HF_DEACTIVATE_ASYNC_LOAD"] = "1"
         proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--worker-config", str(config_path.resolve())],
                                 stdout=log, stderr=log, env=env)
         psproc = psutil.Process(proc.pid)
@@ -450,6 +581,11 @@ def model_family(model):
     return "qwen3.5" if model.startswith("Qwen/Qwen3.5-") else model
 
 
+def model_revision(model, revision):
+    # This compatibility path was verified against one exact Ling checkpoint.
+    return CHECKPOINT_REVISION if model == MODELS["ling"] and revision == "main" else revision
+
+
 def main():
     a = arguments()
     if a.worker_config:
@@ -481,7 +617,7 @@ def main():
         a.ram_limit_bytes = min(a.ram_gib * GIB if a.ram_gib else a.initial_available_ram * .95,
                                a.initial_available_ram * .95, max(0, a.initial_available_ram - GIB))
     except ImportError as exc:
-        write_result(a, {"os": platform.platform(), "cpu": platform.processor(), "model": a.model,
+        write_result(a, {"os": platform.platform(), "cpu": cpu_name(), "model": a.model,
                         "revision": a.revision, "mode": a.mode or "suite", "device": a.device,
                         "status": "missing_dependency", "error": str(exc) + "; complete README setup with this Python"})
         raise SystemExit("Complete README setup using this environment's Python, then rerun.")
@@ -510,6 +646,7 @@ def main():
             if not active:
                 continue
             a.model = model
+            a.revision = model_revision(model, a.revision)
             if a.download:
                 download = copy.copy(a)
                 download.mode, download.activation_offload = "download", False

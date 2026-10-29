@@ -66,6 +66,15 @@ The runner explicitly loads the Qwen models' **text
 backbones** with `Qwen3_5ForCausalLM`; no image/video inputs or vision training
 are used. Ling and Mellum use native `AutoModelForCausalLM` support in the
 pinned Transformers version, with eager expert execution and no remote code.
+The script includes the Linux-tested Ling compatibility fix: it normalizes the
+checkpoint's integer `kda_lower_bound` to a float and restores its low-rank query
+projections. Ling defaults to the reviewed checkpoint
+`9a98e35fe1c9ee255f78dd64771c7ae15a799481`; the compatibility path requires that
+revision and Transformers 5.21.0. It rejects missing, unexpected, or mismatched
+weights and an incorrect parameter count before benchmarking. Loading diagnostics
+are saved locally in a `.loading.json` file; no extra helper download is needed.
+Mellum workers automatically set `HF_DEACTIVATE_ASYNC_LOAD=1` to load checkpoint
+shards sequentially and reduce temporary host-RAM use. The FP32 workload is unchanged.
 `--download` permits model/tokenizer downloads as each size becomes
 needed. Downloads use SafeTensors and `trust_remote_code=False`, and their time
 is excluded from benchmark timing. The resolved checkpoint commit is recorded.
@@ -162,6 +171,9 @@ These pauses are excluded from benchmark timing; recovery details stay in the
 local JSONL. The live 1 GiB RAM reserve remains enforced if recovery is incomplete.
 Download/offload storage is checked before writing. The monitor is best-effort
 sampling, not an OS quota. Stop if the machine becomes unresponsive.
+Every numeric budget must be finite and positive; `NaN` and infinite limits are
+rejected before any worker starts. On Linux, CPU identification falls back to
+`/proc/cpuinfo` when the platform library returns an empty name.
 
 Host RSS is sampled every 0.1 seconds and includes imports/loading/warm-up/work.
 CUDA peaks are allocator peaks, excluding the driver and other processes. MPS
@@ -181,6 +193,7 @@ CSV; those checks do not count as student model measurements.
 Official references: [Qwen3.5 models](https://huggingface.co/Qwen/Qwen3.5-0.8B),
 [Ling-3.0-tiny](https://huggingface.co/inclusionAI/Ling-3.0-tiny),
 [Mellum2.1 Thinking](https://huggingface.co/JetBrains/Mellum2.1-12B-A2.5B-Thinking),
+[sequential checkpoint loading](https://huggingface.co/docs/transformers/en/reference/environment_variables#model-loading),
 [Transformers text-only class](https://huggingface.co/docs/transformers/model_doc/qwen3_5),
 [dynamic INT8](https://docs.pytorch.org/docs/stable/generated/torch.ao.quantization.quantize_dynamic.html),
 [Accelerate offload](https://huggingface.co/docs/accelerate/package_reference/big_modeling),
